@@ -1,6 +1,6 @@
 # setup-postgres-action
 
-This action handles the setup and teardown of an Postgres database.
+This action handles the setup and teardown of a PostgreSQL database.
 
 ## Usage
 

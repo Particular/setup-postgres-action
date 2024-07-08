@@ -1,6 +1,3 @@
-# Allowed regions config clone directory
-.ci-config
-
 # Logs
 logs
 *.log

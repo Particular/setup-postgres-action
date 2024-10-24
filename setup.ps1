@@ -46,7 +46,7 @@ elseif ($runnerOs -eq "Windows") {
     $azureContainerCreate = "az container create --image $dockerImage --name $ContainerName --location $region --resource-group $resourceGroup --cpu 2 --memory 8 --ports $port --ip-address public --environment-variables POSTGRES_PASSWORD='$password' POSTGRES_USER=$userName POSTGRES_DB=$databaseName --command-line 'docker-entrypoint.sh postgres --max-prepared-transactions=10'"
     if ($registryUser -and $registryPass) {
         Write-Output "Creating container with login to $RegistryLoginServer"
-        $azureContainerCreate =  "$azureContainerCreate --registry-login-server $RegistryLoginServer --registry-username '$RegistryUser' --registry-password '$RegistryPass'"
+        $azureContainerCreate =  "$azureContainerCreate --registry-login-server $RegistryLoginServer --registry-username $RegistryUser --registry-password $RegistryPass"
     } else {
         Write-Output "Creating container with anonymous credentials"
     }

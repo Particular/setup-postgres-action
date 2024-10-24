@@ -13,7 +13,6 @@ $password = [guid]::NewGuid().ToString("n")
 Write-Output "::add-mask::$password"
 $userName = "postgres"
 $databaseName = "postgres"
-Write-Output "::add-mask::$databaseName"
 $ipAddress = "127.0.0.1"
 $port = 5432
 $runnerOs = $Env:RUNNER_OS ?? "Linux"

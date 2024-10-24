@@ -44,6 +44,8 @@ elseif ($runnerOs -eq "Windows") {
     $Env:PATH = $Env:PATH + ';' + $Env:PGBIN
        
     $azureContainerCreate = "az container create --image $dockerImage --name $ContainerName --location $region --resource-group $resourceGroup --cpu 2 --memory 8 --ports $port --ip-address public --environment-variables POSTGRES_PASSWORD='$password' POSTGRES_USER=$userName POSTGRES_DB=$databaseName --command-line 'docker-entrypoint.sh postgres --max-prepared-transactions=10'"
+    echo "Initial azureContainerCreate.Length = $($azureContainerCreate.Length)"
+
     if ($registryUser -and $registryPass) {
         Write-Output "Creating container with login to $RegistryLoginServer"
         $azureContainerCreate = $azureContainerCreate + " --registry-login-server $RegistryLoginServer --registry-username $RegistryUser --registry-password $RegistryPass"
@@ -53,6 +55,9 @@ elseif ($runnerOs -eq "Windows") {
 
     Write-Output "Creating container $ContainerName in $region (this can take a while)"
     echo $azureContainerCreate
+    echo "azureContainerCreate.Length = $($azureContainerCreate.Length)"
+    echo "password.Length = $($password.Length)"
+    echo "RegistryPass.Length = $($RegistryPass.Length)"
     echo "azureContainerCreate.Length = $($azureContainerCreate.Length)"
     $containerJson = Invoke-Expression $azureContainerCreate
     

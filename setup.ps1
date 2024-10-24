@@ -52,6 +52,7 @@ elseif ($runnerOs -eq "Windows") {
     }
 
     Write-Output "Creating container $ContainerName in $region (this can take a while)"
+    echo $azureContainerCreate
     $containerJson = Invoke-Expression $azureContainerCreate
     
     if (!$containerJson) {

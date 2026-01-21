@@ -8,7 +8,7 @@ param (
     [string]$RegistryPass
 )
 
-$dockerImage = "postgres:15"
+$dockerImage = "postgres:18"
 $password = [guid]::NewGuid().ToString("n")
 Write-Output "::add-mask::$password"
 $userName = "postgres"
@@ -42,7 +42,7 @@ elseif ($runnerOs -eq "Windows") {
 
     # psql not in PATH on Windows
     $Env:PATH = $Env:PATH + ';' + $Env:PGBIN
-       
+
     $azureContainerCreate = "az container create --image $dockerImage --name $ContainerName --location $region --resource-group $resourceGroup --cpu 2 --memory 8 --ports $port --ip-address public --os-type Linux --environment-variables POSTGRES_PASSWORD=$password POSTGRES_USER=$userName POSTGRES_DB=$databaseName --command-line 'docker-entrypoint.sh postgres --max-prepared-transactions=10'"
     if ($registryUser -and $registryPass) {
         Write-Output "Creating container with login to $RegistryLoginServer"
@@ -53,14 +53,14 @@ elseif ($runnerOs -eq "Windows") {
 
     Write-Output "Creating container $ContainerName in $region (this can take a while)"
     $containerJson = Invoke-Expression $azureContainerCreate
-    
+
     if (!$containerJson) {
         Write-Output "Failed to create container $ContainerName in $region"
         exit 1;
     }
-    
+
     $containerDetails = $containerJson | ConvertFrom-Json
-    
+
     if (!$containerDetails.ipAddress) {
         Write-Output "Failed to create container $ContainerName in $region"
         Write-Output $containerJson

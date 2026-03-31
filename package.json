@@ -28,7 +28,7 @@
   },
   "homepage": "https://github.com/Particular/setup-postgres-action#readme",
   "dependencies": {
-    "@actions/core": "^2.0.0",
+    "@actions/core": "^3.0.0",
     "@actions/exec": "^2.0.0",
     "dotenv": "^17.0.0",
     "npm-watch": "^0.13.0"

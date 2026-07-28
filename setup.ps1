@@ -143,7 +143,10 @@ Write-Output "::group::Testing connection"
 
 for ($i = 0; $i -lt 24; $i++) { ## 2 minute timeout
     Write-Output "Checking for PostgreSQL connectivity $($i+1)/30..."
-    psql --host $ipAddress --username=$userName --list > $null
+    # SELECT 1 is version-agnostic. `--list` runs a catalog query whose column names change
+    # across major versions (e.g. daticulocale -> datlocale), which breaks when the runner's
+    # older psql client probes a newer server (psql 15/16 vs postgres:18).
+    psql --host $ipAddress --username=$userName --command "SELECT 1" > $null
     if ($?) {
         Write-Output "Connection successful"
       break;

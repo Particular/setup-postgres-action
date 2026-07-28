@@ -12,14 +12,13 @@ steps:
   uses: Particular/setup-postgres-action@v1.0.0
   with:
     connection-string-name: <my connection string name>
-    tag: <my tag>
     init-script: /path/to/init-posgres.sql
     registry-login-server: index.docker.io
     registry-username: ${{ secrets.DOCKERHUB_USERNAME }}
     registry-password: ${{ secrets.DOCKERHUB_TOKEN }}}}    
 ```
 
-`connection-string-name` and `tag` are required. `init-script` is optional.
+`connection-string-name` is required. `init-script` is optional.
 
 For logging into a container registry when running on Windows:
 
@@ -84,7 +83,7 @@ To test the setup action set the required environment variables and execute `set
 
 ```bash
 $Env:RUNNER_OS=Windows
-.\setup.ps1 -ContainerName psw-postgres-1 -ConnectionStringName PostgresConnectionString -Tag setup-postgres-action
+.\setup.ps1 -ContainerName psw-postgres-1 -ConnectionStringName PostgresConnectionString
 ```
 
 To test the cleanup action set the required environment variables and execute `cleanup.ps1` with the desired parameters.

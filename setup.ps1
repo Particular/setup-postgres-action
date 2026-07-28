@@ -2,7 +2,6 @@ param (
     [string]$ContainerName,
     [string]$ConnectionStringName,
     [string]$InitScript = "",
-    [string]$Tag,
     [string]$RegistryLoginServer = "index.docker.io",
     [string]$RegistryUser,
     [string]$RegistryPass
@@ -16,7 +15,6 @@ $databaseName = "postgres"
 $ipAddress = "127.0.0.1"
 $port = 5432
 $runnerOs = $Env:RUNNER_OS ?? "Linux"
-$resourceGroup = $Env:RESOURCE_GROUP_OVERRIDE ?? "GitHubActions-RG"
 
 $env:PGPASSWORD = $password
 
@@ -47,7 +45,7 @@ elseif ($runnerOs -eq "Windows") {
     # psql is not in PATH on Windows
     $Env:PATH = $Env:PATH + ';' + $Env:PGBIN
 
-    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Ubuntu-24.04"
+    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Debian"
 
     Write-Output "::group::Preparing WSL ($wslDistribution)"
 
@@ -73,9 +71,9 @@ elseif ($runnerOs -eq "Windows") {
     Write-Output "Ensuring Docker is installed inside $wslDistribution"
     Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "command -v docker >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes docker.io; }"
 
-    # Start the Docker daemon. Systemd is enabled by default on Ubuntu-24.04.
+    # Start the Docker daemon via systemd when available, otherwise via the SysV service.
     Write-Output "Starting Docker daemon inside $wslDistribution"
-    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "docker info >/dev/null 2>&1 || systemctl start docker || service docker start"
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "docker info >/dev/null 2>&1 || { if [ -d /run/systemd/system ]; then systemctl start docker; else service docker start; fi; }"
 
     # Optionally log in to the container registry to avoid rate limits when pulling.
     if ($registryUser -and $registryPass) {

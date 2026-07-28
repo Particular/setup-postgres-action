@@ -1,7 +1,6 @@
 param (
     [string]$ContainerName
 )
-$resourceGroup = $Env:RESOURCE_GROUP_OVERRIDE ?? "GitHubActions-RG"
 $runnerOs = $Env:RUNNER_OS ?? "Linux"
 
 if ($runnerOs -eq "Linux") {
@@ -12,7 +11,7 @@ if ($runnerOs -eq "Linux") {
     docker rm $ContainerName
 }
 elseif ($runnerOs -eq "Windows") {
-    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Ubuntu-24.04"
+    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Debian"
 
     Write-Output "Removing WSL Docker container $ContainerName"
     wsl.exe --distribution $wslDistribution --user root -- bash -c "docker rm --force ${ContainerName} 2>/dev/null || true"

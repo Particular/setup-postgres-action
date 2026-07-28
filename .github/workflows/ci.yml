@@ -34,7 +34,6 @@ jobs:
         uses: ./
         with:
           connection-string-name: PostgresConnectionString
-          tag: setup-postgres-action
           init-script: ${{ matrix.init-script.path }}
           registry-username: ${{ secrets.DOCKERHUB_USERNAME }}
           registry-password: ${{ secrets.DOCKERHUB_TOKEN }}

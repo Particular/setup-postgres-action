@@ -20,59 +20,95 @@ $resourceGroup = $Env:RESOURCE_GROUP_OVERRIDE ?? "GitHubActions-RG"
 
 $env:PGPASSWORD = $password
 
+function Invoke-Wsl {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Distribution,
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+        [switch]$CheckExitCode
+    )
+
+    wsl.exe --distribution $Distribution --user root -- bash -c $Command
+
+    if ($CheckExitCode -and $LASTEXITCODE -ne 0) {
+        throw "WSL command failed with exit code $LASTEXITCODE`: $Command"
+    }
+}
+
 if ($runnerOs -eq "Linux") {
     Write-Output "Running Postgres in container $($ContainerName) using Docker"
 
     docker run --name "$($ContainerName)" -d -p "$($port):$($port)" -e POSTGRES_PASSWORD=$password -e POSTGRES_USER=$userName -e POSTGRES_DB=$databaseName $dockerImage -c max_prepared_transactions=10
 }
 elseif ($runnerOs -eq "Windows") {
-    Write-Output "Running Postgres in container $($ContainerName) using Azure"
+    Write-Output "Running Postgres in container $($ContainerName) using WSL"
 
-    if ($Env:REGION_OVERRIDE) {
-        $region = $Env:REGION_OVERRIDE
-    }
-    else {
-        $hostInfo = curl -H Metadata:true "169.254.169.254/metadata/instance?api-version=2017-08-01" | ConvertFrom-Json
-        $region = $hostInfo.compute.location
-    }
-
-    $runnerOsTag = "RunnerOS=$($runnerOs)"
-    $packageTag = "Package=$Tag"
-    $dateTag = "Created=$(Get-Date -Format "yyyy-MM-dd")"
-
-    # psql not in PATH on Windows
+    # psql is not in PATH on Windows
     $Env:PATH = $Env:PATH + ';' + $Env:PGBIN
 
-    $azureContainerCreate = "az container create --image $dockerImage --name $ContainerName --location $region --resource-group $resourceGroup --cpu 2 --memory 8 --ports $port --ip-address public --os-type Linux --environment-variables POSTGRES_PASSWORD=$password POSTGRES_USER=$userName POSTGRES_DB=$databaseName --command-line 'docker-entrypoint.sh postgres --max-prepared-transactions=10'"
+    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Ubuntu-24.04"
+
+    Write-Output "::group::Preparing WSL ($wslDistribution)"
+
+    wsl.exe --set-default-version 2 | Out-Null
+
+    # Install the distribution if it is not already registered.
+    $installedDistributions = ((wsl.exe --list --quiet) -replace "`0", "") |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -ne "" }
+
+    if ($installedDistributions -notcontains $wslDistribution) {
+        Write-Output "Installing $wslDistribution in WSL"
+        wsl.exe --install $wslDistribution --web-download --no-launch
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install $wslDistribution in WSL"
+        }
+    }
+    else {
+        Write-Output "$wslDistribution is already installed"
+    }
+
+    # Ensure Docker is installed inside the WSL distribution.
+    Write-Output "Ensuring Docker is installed inside $wslDistribution"
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "command -v docker >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes docker.io; }"
+
+    # Start the Docker daemon. Systemd is enabled by default on Ubuntu-24.04.
+    Write-Output "Starting Docker daemon inside $wslDistribution"
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "docker info >/dev/null 2>&1 || systemctl start docker || service docker start"
+
+    # Optionally log in to the container registry to avoid rate limits when pulling.
     if ($registryUser -and $registryPass) {
-        Write-Output "Creating container with login to $RegistryLoginServer"
-        $azureContainerCreate =  "$azureContainerCreate --registry-login-server $RegistryLoginServer --registry-username $RegistryUser --registry-password $RegistryPass"
-    } else {
-        Write-Output "Creating container with anonymous credentials"
+        Write-Output "::add-mask::$registryPass"
+        Write-Output "Logging in to $RegistryLoginServer inside WSL"
+        $loginCommand = "docker login --username '$RegistryUser' --password-stdin '$RegistryLoginServer'"
+        $registryPass | wsl.exe --distribution $wslDistribution --user root -- bash -c $loginCommand
+        if ($LASTEXITCODE -ne 0) {
+            throw "Docker registry login inside WSL failed with exit code $LASTEXITCODE"
+        }
+    }
+    else {
+        Write-Output "Using anonymous credentials"
     }
 
-    Write-Output "Creating container $ContainerName in $region (this can take a while)"
-    $containerJson = Invoke-Expression $azureContainerCreate
+    Write-Output "::endgroup::"
 
-    if (!$containerJson) {
-        Write-Output "Failed to create container $ContainerName in $region"
-        exit 1;
+    Write-Output "::group::Starting PostgreSQL container"
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "docker run --name $ContainerName --detach --publish ${port}:${port} -e POSTGRES_PASSWORD='$password' -e POSTGRES_USER='$userName' -e POSTGRES_DB='$databaseName' $dockerImage -c max_prepared_transactions=10"
+
+    # Determine the WSL VM IPv4 address so that Windows can reach the published port.
+    $wslIp = ((wsl.exe --distribution $wslDistribution --user root -- hostname -I) -replace "`0", "").Trim().Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries) |
+        Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } |
+        Select-Object -First 1
+
+    if (-not $wslIp) {
+        throw "Could not determine the WSL IPv4 address"
     }
 
-    $containerDetails = $containerJson | ConvertFrom-Json
+    $ipAddress = $wslIp
+    Write-Output "WSL address: $ipAddress"
 
-    if (!$containerDetails.ipAddress) {
-        Write-Output "Failed to create container $ContainerName in $region"
-        Write-Output $containerJson
-        exit 1;
-    }
-
-    $ipAddress = $containerDetails.ipAddress.ip
-    Write-Output "::add-mask::$ipAddress"
-
-    Write-Output "Tagging the container"
-    az tag create --resource-id $containerDetails.id --tags $packageTag $runnerOsTag $dateTag | Out-Null
-
+    Write-Output "::endgroup::"
 }
 else {
     Write-Output "$runnerOs not supported"

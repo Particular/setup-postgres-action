@@ -106,10 +106,12 @@ elseif ($runnerOs -eq "Windows") {
     # See https://github.com/microsoft/WSL/issues/10138 and
     # https://blog.lecoteauverdoyant.co.uk/articles/wsl-keep-alive.html
     Write-Output "Starting a D-Bus session to keep the WSL instance alive for the job"
-    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "command -v dbus-launch >/dev/null 2>&1 || { apt-get update && apt-get install -y dbus; }"
+    # dbus-launch ships in the dbus-x11 package (not dbus). Verify it is present afterwards so a
+    # packaging change can never silently leave the instance unguarded again.
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "command -v dbus-launch >/dev/null 2>&1 || { apt-get update && apt-get install -y dbus-x11; }; command -v dbus-launch >/dev/null 2>&1 || { echo 'dbus-launch is unavailable after installing dbus-x11' >&2; exit 1; }"
     wsl.exe --distribution $wslDistribution --user root --exec /usr/bin/dbus-launch true
     if ($LASTEXITCODE -ne 0) {
-        Write-Output "::warning::dbus-launch keep-alive returned exit code $LASTEXITCODE"
+        throw "dbus-launch keep-alive failed with exit code $LASTEXITCODE"
     }
 
     Write-Output "::endgroup::"

@@ -2,7 +2,6 @@ param (
     [string]$ContainerName,
     [string]$ConnectionStringName,
     [string]$InitScript = "",
-    [string]$Tag,
     [string]$RegistryLoginServer = "index.docker.io",
     [string]$RegistryUser,
     [string]$RegistryPass
@@ -16,9 +15,12 @@ $databaseName = "postgres"
 $ipAddress = "127.0.0.1"
 $port = 5432
 $runnerOs = $Env:RUNNER_OS ?? "Linux"
-$resourceGroup = $Env:RESOURCE_GROUP_OVERRIDE ?? "GitHubActions-RG"
 
 $env:PGPASSWORD = $password
+
+# Import local module containing Invoke-Wsl
+$modulePath = Join-Path $PSScriptRoot 'modules' 'WslTools'
+Import-Module $modulePath -Force
 
 if ($runnerOs -eq "Linux") {
     Write-Output "Running Postgres in container $($ContainerName) using Docker"
@@ -26,53 +28,99 @@ if ($runnerOs -eq "Linux") {
     docker run --name "$($ContainerName)" -d -p "$($port):$($port)" -e POSTGRES_PASSWORD=$password -e POSTGRES_USER=$userName -e POSTGRES_DB=$databaseName $dockerImage -c max_prepared_transactions=10
 }
 elseif ($runnerOs -eq "Windows") {
-    Write-Output "Running Postgres in container $($ContainerName) using Azure"
+    Write-Output "Running Postgres in container $($ContainerName) using WSL"
 
-    if ($Env:REGION_OVERRIDE) {
-        $region = $Env:REGION_OVERRIDE
-    }
-    else {
-        $hostInfo = curl -H Metadata:true "169.254.169.254/metadata/instance?api-version=2017-08-01" | ConvertFrom-Json
-        $region = $hostInfo.compute.location
-    }
-
-    $runnerOsTag = "RunnerOS=$($runnerOs)"
-    $packageTag = "Package=$Tag"
-    $dateTag = "Created=$(Get-Date -Format "yyyy-MM-dd")"
-
-    # psql not in PATH on Windows
+    # psql is not in PATH on Windows
     $Env:PATH = $Env:PATH + ';' + $Env:PGBIN
 
-    $azureContainerCreate = "az container create --image $dockerImage --name $ContainerName --location $region --resource-group $resourceGroup --cpu 2 --memory 8 --ports $port --ip-address public --os-type Linux --environment-variables POSTGRES_PASSWORD=$password POSTGRES_USER=$userName POSTGRES_DB=$databaseName --command-line 'docker-entrypoint.sh postgres --max-prepared-transactions=10'"
+    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Debian"
+
+    # Constrain the WSL2 VM (memory) and keep it from being shut down when idle, so that Docker
+    # and the container are not torn down between this setup step and the test step. Only write
+    # when the file is absent so local development configurations are left untouched.
+    $wslConfigPath = Join-Path $Env:USERPROFILE ".wslconfig"
+    if (-not (Test-Path $wslConfigPath)) {
+        $wslMemory = $Env:WSL_MEMORY_OVERRIDE ?? "3GB"
+        Write-Output "Writing $wslConfigPath (memory=$wslMemory) to constrain the WSL2 VM"
+        Set-Content -Path $wslConfigPath -Value "[wsl2]`nmemory=$wslMemory`nvmIdleTimeout=-1" -Encoding ASCII
+    }
+
+    Write-Output "::group::Preparing WSL ($wslDistribution)"
+
+    wsl.exe --set-default-version 2 | Out-Null
+
+    # Install the distribution if it is not already registered.
+    $installedDistributions = ((wsl.exe --list --quiet) -replace "`0", "") |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -ne "" }
+
+    if ($installedDistributions -notcontains $wslDistribution) {
+        Write-Output "Installing $wslDistribution in WSL"
+        wsl.exe --install $wslDistribution --web-download --no-launch
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install $wslDistribution in WSL"
+        }
+    }
+    else {
+        Write-Output "$wslDistribution is already installed"
+    }
+
+    # Ensure Docker is installed inside the WSL distribution.
+    Write-Output "Ensuring Docker is installed inside $wslDistribution"
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "command -v docker >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes docker.io; }"
+
+    # Start the Docker daemon via systemd when available, otherwise via the SysV service.
+    Write-Output "Starting Docker daemon inside $wslDistribution"
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "docker info >/dev/null 2>&1 || { if [ -d /run/systemd/system ]; then systemctl start docker; else service docker start; fi; }"
+
+    # Optionally log in to the container registry to avoid rate limits when pulling.
     if ($registryUser -and $registryPass) {
-        Write-Output "Creating container with login to $RegistryLoginServer"
-        $azureContainerCreate =  "$azureContainerCreate --registry-login-server $RegistryLoginServer --registry-username $RegistryUser --registry-password $RegistryPass"
-    } else {
-        Write-Output "Creating container with anonymous credentials"
+        Write-Output "::add-mask::$registryPass"
+        Write-Output "Logging in to $RegistryLoginServer inside WSL"
+        $loginCommand = "docker login --username '$RegistryUser' --password-stdin '$RegistryLoginServer'"
+        $registryPass | wsl.exe --distribution $wslDistribution --user root -- bash -c $loginCommand
+        if ($LASTEXITCODE -ne 0) {
+            throw "Docker registry login inside WSL failed with exit code $LASTEXITCODE"
+        }
+    }
+    else {
+        Write-Output "Using anonymous credentials"
     }
 
-    Write-Output "Creating container $ContainerName in $region (this can take a while)"
-    $containerJson = Invoke-Expression $azureContainerCreate
-
-    if (!$containerJson) {
-        Write-Output "Failed to create container $ContainerName in $region"
-        exit 1;
+    # Keep the WSL instance alive for the rest of the job. WSL terminates an instance when no
+    # processes remain under its init (PID 2); a plain background process (e.g. sleep) does not
+    # prevent this, but a D-Bus session bus launched through `wsl --exec` does. vmIdleTimeout
+    # above covers the VM-level idle timeout; this covers the separate instance-level shutdown.
+    # See https://github.com/microsoft/WSL/issues/10138 and
+    # https://blog.lecoteauverdoyant.co.uk/articles/wsl-keep-alive.html
+    Write-Output "Starting a D-Bus session to keep the WSL instance alive for the job"
+    # dbus-launch ships in the dbus-x11 package (not dbus). Verify it is present afterwards so a
+    # packaging change can never silently leave the instance unguarded again.
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "command -v dbus-launch >/dev/null 2>&1 || { apt-get update && apt-get install -y dbus-x11; }; command -v dbus-launch >/dev/null 2>&1 || { echo 'dbus-launch is unavailable after installing dbus-x11' >&2; exit 1; }"
+    wsl.exe --distribution $wslDistribution --user root --exec /usr/bin/dbus-launch true
+    if ($LASTEXITCODE -ne 0) {
+        throw "dbus-launch keep-alive failed with exit code $LASTEXITCODE"
     }
 
-    $containerDetails = $containerJson | ConvertFrom-Json
+    Write-Output "::endgroup::"
 
-    if (!$containerDetails.ipAddress) {
-        Write-Output "Failed to create container $ContainerName in $region"
-        Write-Output $containerJson
-        exit 1;
+    Write-Output "::group::Starting PostgreSQL container"
+    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "docker run --name $ContainerName --detach --restart unless-stopped --publish ${port}:${port} -e POSTGRES_PASSWORD='$password' -e POSTGRES_USER='$userName' -e POSTGRES_DB='$databaseName' $dockerImage -c max_prepared_transactions=10"
+    Invoke-Wsl -Distribution $wslDistribution -Command "docker ps --filter name=$ContainerName"
+
+    # Determine the WSL VM IPv4 address so that Windows can reach the published port.
+    $wslIp = ((wsl.exe --distribution $wslDistribution --user root -- hostname -I) -replace "`0", "").Trim().Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries) |
+        Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } |
+        Select-Object -First 1
+
+    if (-not $wslIp) {
+        throw "Could not determine the WSL IPv4 address"
     }
 
-    $ipAddress = $containerDetails.ipAddress.ip
-    Write-Output "::add-mask::$ipAddress"
+    $ipAddress = $wslIp
+    Write-Output "WSL address: $ipAddress"
 
-    Write-Output "Tagging the container"
-    az tag create --resource-id $containerDetails.id --tags $packageTag $runnerOsTag $dateTag | Out-Null
-
+    Write-Output "::endgroup::"
 }
 else {
     Write-Output "$runnerOs not supported"
@@ -83,7 +131,10 @@ Write-Output "::group::Testing connection"
 
 for ($i = 0; $i -lt 24; $i++) { ## 2 minute timeout
     Write-Output "Checking for PostgreSQL connectivity $($i+1)/30..."
-    psql --host $ipAddress --username=$userName --list > $null
+    # SELECT 1 is version-agnostic. `--list` runs a catalog query whose column names change
+    # across major versions (e.g. daticulocale -> datlocale), which breaks when the runner's
+    # older psql client probes a newer server (psql 15/16 vs postgres:18).
+    psql --host $ipAddress --username=$userName --command "SELECT 1" > $null
     if ($?) {
         Write-Output "Connection successful"
       break;

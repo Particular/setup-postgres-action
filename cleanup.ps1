@@ -1,7 +1,6 @@
 param (
     [string]$ContainerName
 )
-$resourceGroup = $Env:RESOURCE_GROUP_OVERRIDE ?? "GitHubActions-RG"
 $runnerOs = $Env:RUNNER_OS ?? "Linux"
 
 if ($runnerOs -eq "Linux") {
@@ -12,8 +11,10 @@ if ($runnerOs -eq "Linux") {
     docker rm $ContainerName
 }
 elseif ($runnerOs -eq "Windows") {
-    Write-Output "Deleting Azure container $ContainerName"
-    az container delete --resource-group $resourceGroup --name $ContainerName --yes | Out-Null
+    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Debian"
+
+    Write-Output "Removing WSL Docker container $ContainerName"
+    wsl.exe --distribution $wslDistribution --user root -- bash -c "docker rm --force ${ContainerName} 2>/dev/null || true"
 }
 else {
     Write-Output "$runnerOs not supported"

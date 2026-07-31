@@ -14,7 +14,6 @@ let isPost = core.getState('IsPost');
 core.saveState('IsPost', true);
 
 let connectionStringName = core.getInput('connection-string-name');
-let tag = core.getInput('tag');
 let initScript = core.getInput('init-script');
 let registryLoginServer = core.getInput('registry-login-server');
 let registryUser = core.getInput('registry-username');
@@ -42,7 +41,6 @@ async function run() {
                     '-ContainerName', containerName,
                     '-ConnectionStringName', connectionStringName,
                     '-InitScript', initScript,
-                    '-Tag', tag,
                     '-RegistryLoginServer', registryLoginServer,
                     '-RegistryUser', registryUser,
                     '-RegistryPass', registryPass                    

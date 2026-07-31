@@ -18,21 +18,9 @@ $runnerOs = $Env:RUNNER_OS ?? "Linux"
 
 $env:PGPASSWORD = $password
 
-function Invoke-Wsl {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Distribution,
-        [Parameter(Mandatory = $true)]
-        [string]$Command,
-        [switch]$CheckExitCode
-    )
-
-    wsl.exe --distribution $Distribution --user root -- bash -c $Command
-
-    if ($CheckExitCode -and $LASTEXITCODE -ne 0) {
-        throw "WSL command failed with exit code $LASTEXITCODE`: $Command"
-    }
-}
+# Import local module containing Invoke-Wsl
+$modulePath = Join-Path $PSScriptRoot 'modules' 'WslTools'
+Import-Module $modulePath -Force
 
 if ($runnerOs -eq "Linux") {
     Write-Output "Running Postgres in container $($ContainerName) using Docker"

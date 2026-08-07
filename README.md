@@ -2,12 +2,20 @@
 
 This action handles the setup and teardown of a PostgreSQL database.
 
+## Prerequisites
+
+This action does **not** provision WSL or Docker itself. On **Windows** runners it requires [setup-wsl-action](https://github.com/Particular/setup-wsl-action) to run **first** in the same job — that action provisions WSL2 + Docker, keeps the instance alive, and exports the `WSL_DISTRIBUTION`, `WSL_IP`, and `WSL_TOOLS_MODULE_PATH` environment variables this action relies on. On **Linux** runners setup-wsl-action is a no-op but should still be included so the workflow is uniform.
+
+If setup-wsl-action has not run, the action fails fast with a clear error.
+
 ## Usage
 
 See [action.yml](action.yml)
 
 ```yaml
 steps:
+- name: Setup WSL
+  uses: Particular/setup-wsl-action@v1
 - name: Setup Postgres
   uses: Particular/setup-postgres-action@v1.0.0
   with:
@@ -25,7 +33,7 @@ For logging into a container registry when running on Windows:
 * `registry-login-server` defaults to `index.docker.io` and is not required if logging into Docker Hub.
 * `registry-username` and `registry-password` are optional and will result in pulling the container anonymously if omitted.
 
-On Linux runners the PostgreSQL container runs directly through Docker. On Windows runners the Linux PostgreSQL container runs inside WSL2 (the action installs and starts Docker inside the WSL distribution), so no Azure Container Instances are required.
+On Linux runners the PostgreSQL container runs directly through Docker. On Windows runners the Linux PostgreSQL container runs inside WSL2 provisioned by [setup-wsl-action](https://github.com/Particular/setup-wsl-action) — run it first, see [Prerequisites](#prerequisites).
 
 ## License
 
@@ -92,3 +100,5 @@ To test the cleanup action set the required environment variables and execute `c
 $Env:RUNNER_OS=Windows
 .\cleanup.ps1 -ContainerName psw-postgres-1
 ```
+
+> Running `setup.ps1`/`cleanup.ps1` directly on Windows requires `WSL_TOOLS_MODULE_PATH` to point at setup-wsl-action's `WslTools` module (set it by running setup-wsl-action first).

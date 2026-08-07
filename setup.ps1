@@ -18,9 +18,12 @@ $runnerOs = $Env:RUNNER_OS ?? "Linux"
 
 $env:PGPASSWORD = $password
 
-# Import local module containing Invoke-Wsl
-$modulePath = Join-Path $PSScriptRoot 'modules' 'WslTools'
-Import-Module $modulePath -Force
+# Import the WslTools module (Invoke-Wsl) exported by setup-wsl-action. The guard gives a
+# clear error if setup-wsl-action hasn't run, since this action no longer provisions WSL itself.
+if (-not $Env:WSL_TOOLS_MODULE_PATH) {
+    throw "This action requires Particular/setup-wsl-action to run first — it provisions WSL/Docker and exports the WslTools module at WSL_TOOLS_MODULE_PATH."
+}
+Import-Module $Env:WSL_TOOLS_MODULE_PATH -Force
 
 if ($runnerOs -eq "Linux") {
     Write-Output "Running Postgres in container $($ContainerName) using Docker"
@@ -33,45 +36,15 @@ elseif ($runnerOs -eq "Windows") {
     # psql is not in PATH on Windows
     $Env:PATH = $Env:PATH + ';' + $Env:PGBIN
 
-    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Debian"
+    # WSL and Docker were provisioned by setup-wsl-action. Read the distribution and the WSL
+    # VM IP from the environment it exported rather than provisioning or detecting them here.
+    $wslDistribution = $Env:WSL_DISTRIBUTION
+    $ipAddress = $Env:WSL_IP
 
-    # Constrain the WSL2 VM (memory) and keep it from being shut down when idle, so that Docker
-    # and the container are not torn down between this setup step and the test step. Only write
-    # when the file is absent so local development configurations are left untouched.
-    $wslConfigPath = Join-Path $Env:USERPROFILE ".wslconfig"
-    if (-not (Test-Path $wslConfigPath)) {
-        $wslMemory = $Env:WSL_MEMORY_OVERRIDE ?? "3GB"
-        Write-Output "Writing $wslConfigPath (memory=$wslMemory) to constrain the WSL2 VM"
-        Set-Content -Path $wslConfigPath -Value "[wsl2]`nmemory=$wslMemory`nvmIdleTimeout=-1" -Encoding ASCII
+    if (-not $ipAddress) {
+        throw "WSL_IP is not set. Run Particular/setup-wsl-action before this action."
     }
-
-    Write-Output "::group::Preparing WSL ($wslDistribution)"
-
-    wsl.exe --set-default-version 2 | Out-Null
-
-    # Install the distribution if it is not already registered.
-    $installedDistributions = ((wsl.exe --list --quiet) -replace "`0", "") |
-        ForEach-Object { $_.Trim() } |
-        Where-Object { $_ -ne "" }
-
-    if ($installedDistributions -notcontains $wslDistribution) {
-        Write-Output "Installing $wslDistribution in WSL"
-        wsl.exe --install $wslDistribution --web-download --no-launch
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to install $wslDistribution in WSL"
-        }
-    }
-    else {
-        Write-Output "$wslDistribution is already installed"
-    }
-
-    # Ensure Docker is installed inside the WSL distribution.
-    Write-Output "Ensuring Docker is installed inside $wslDistribution"
-    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "command -v docker >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes docker.io; }"
-
-    # Start the Docker daemon via systemd when available, otherwise via the SysV service.
-    Write-Output "Starting Docker daemon inside $wslDistribution"
-    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "docker info >/dev/null 2>&1 || { if [ -d /run/systemd/system ]; then systemctl start docker; else service docker start; fi; }"
+    Write-Output "WSL address: $ipAddress"
 
     # Optionally log in to the container registry to avoid rate limits when pulling.
     if ($registryUser -and $registryPass) {
@@ -87,39 +60,9 @@ elseif ($runnerOs -eq "Windows") {
         Write-Output "Using anonymous credentials"
     }
 
-    # Keep the WSL instance alive for the rest of the job. WSL terminates an instance when no
-    # processes remain under its init (PID 2); a plain background process (e.g. sleep) does not
-    # prevent this, but a D-Bus session bus launched through `wsl --exec` does. vmIdleTimeout
-    # above covers the VM-level idle timeout; this covers the separate instance-level shutdown.
-    # See https://github.com/microsoft/WSL/issues/10138 and
-    # https://blog.lecoteauverdoyant.co.uk/articles/wsl-keep-alive.html
-    Write-Output "Starting a D-Bus session to keep the WSL instance alive for the job"
-    # dbus-launch ships in the dbus-x11 package (not dbus). Verify it is present afterwards so a
-    # packaging change can never silently leave the instance unguarded again.
-    Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "command -v dbus-launch >/dev/null 2>&1 || { apt-get update && apt-get install -y dbus-x11; }; command -v dbus-launch >/dev/null 2>&1 || { echo 'dbus-launch is unavailable after installing dbus-x11' >&2; exit 1; }"
-    wsl.exe --distribution $wslDistribution --user root --exec /usr/bin/dbus-launch true
-    if ($LASTEXITCODE -ne 0) {
-        throw "dbus-launch keep-alive failed with exit code $LASTEXITCODE"
-    }
-
-    Write-Output "::endgroup::"
-
     Write-Output "::group::Starting PostgreSQL container"
     Invoke-Wsl -Distribution $wslDistribution -CheckExitCode -Command "docker run --name $ContainerName --detach --restart unless-stopped --publish ${port}:${port} -e POSTGRES_PASSWORD='$password' -e POSTGRES_USER='$userName' -e POSTGRES_DB='$databaseName' $dockerImage -c max_prepared_transactions=10"
     Invoke-Wsl -Distribution $wslDistribution -Command "docker ps --filter name=$ContainerName"
-
-    # Determine the WSL VM IPv4 address so that Windows can reach the published port.
-    $wslIp = ((wsl.exe --distribution $wslDistribution --user root -- hostname -I) -replace "`0", "").Trim().Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries) |
-        Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } |
-        Select-Object -First 1
-
-    if (-not $wslIp) {
-        throw "Could not determine the WSL IPv4 address"
-    }
-
-    $ipAddress = $wslIp
-    Write-Output "WSL address: $ipAddress"
-
     Write-Output "::endgroup::"
 }
 else {

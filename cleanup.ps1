@@ -1,6 +1,14 @@
 param (
     [string]$ContainerName
 )
+
+# The Windows container removal runs through the WslTools module (Invoke-Wsl), which
+# setup-wsl-action exports at WSL_TOOLS_MODULE_PATH. Import it here with a clear guard.
+if (-not $Env:WSL_TOOLS_MODULE_PATH) {
+    throw "This action requires Particular/setup-wsl-action to run first — it provisions WSL/Docker and exports the WslTools module at WSL_TOOLS_MODULE_PATH."
+}
+Import-Module $Env:WSL_TOOLS_MODULE_PATH -Force
+
 $runnerOs = $Env:RUNNER_OS ?? "Linux"
 
 if ($runnerOs -eq "Linux") {
@@ -11,10 +19,8 @@ if ($runnerOs -eq "Linux") {
     docker rm $ContainerName
 }
 elseif ($runnerOs -eq "Windows") {
-    $wslDistribution = $Env:WSL_DISTRIBUTION_OVERRIDE ?? "Debian"
-
     Write-Output "Removing WSL Docker container $ContainerName"
-    wsl.exe --distribution $wslDistribution --user root -- bash -c "docker rm --force ${ContainerName} 2>/dev/null || true"
+    Invoke-Wsl -Command "docker rm --force ${ContainerName} 2>/dev/null || true"
 }
 else {
     Write-Output "$runnerOs not supported"

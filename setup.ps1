@@ -72,18 +72,28 @@ else {
 
 Write-Output "::group::Testing connection"
 
-for ($i = 0; $i -lt 24; $i++) { ## 2 minute timeout
-    Write-Output "Checking for PostgreSQL connectivity $($i+1)/30..."
+# PGCONNECT_TIMEOUT bounds each attempt; without it an unreachable host hangs on the OS TCP timeout (~21s/attempt).
+$env:PGCONNECT_TIMEOUT = "5"
+
+$connectionAttempts = 24
+$connected = $false
+for ($i = 0; $i -lt $connectionAttempts; $i++) {
+    Write-Output "Checking for PostgreSQL connectivity $($i + 1)/$connectionAttempts..."
     # SELECT 1 is version-agnostic. `--list` runs a catalog query whose column names change
     # across major versions (e.g. daticulocale -> datlocale), which breaks when the runner's
     # older psql client probes a newer server (psql 15/16 vs postgres:18).
     psql --host $ipAddress --username=$userName --command "SELECT 1" > $null
     if ($?) {
+        $connected = $true
         Write-Output "Connection successful"
-      break;
+        break
     }
     sleep 5
-  }
+}
+
+if (-not $connected) {
+    throw "PostgreSQL at ${ipAddress}:${port} never accepted a connection after $connectionAttempts attempts. The container may have failed to start, or the host is unreachable from the runner. Check the container status (docker ps / container logs); on Windows runners confirm the WSL VM IP exported by setup-wsl-action (${ipAddress}) is reachable from the runner."
+}
 
 Write-Output "::endgroup::"
 
